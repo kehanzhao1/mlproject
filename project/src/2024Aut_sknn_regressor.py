@@ -23,27 +23,97 @@ df = pd.read_csv(f'..{os.sep}data{os.sep}HousePricesAdv{os.sep}train.csv', heade
 # Project tasks and goals:
 # 
 # 1. Use this Housing Price dataset. 
-# - Use SalePrice as target for K-NN regression. 
+# - Use SalePrice as target for K-NN regression. 81
 # - For features that are *ORDINAL*, recode them as 0,1,2,... 
 # - Drop features that are purely categorical.
 # 2. Modify the sknn class to perform K-NN regression.
 # 3. Modify the sknn class as you see fit to improve the algorithm performance, logic, or presentations.
 # 3. Find optimized scaling factors for the features for the best model score.
-# 4. Modify the sknn class to save some results (such as scores, scaling factors, gradients, etc, at various points, like every 100 epoch).
-# 5. Compare the results of the optimized scaling factors to Feature Importance from other models, such as Tree regressor for example.
-# 
+# 4. Modify the sknn class to save some results (such as scores, scaling factors, gradients, 
+#  etc, at various points, like every 100 epoch).
+# 5. Compare the results of the optimized scaling factors to Feature Importance
+#  from other models, such as Tree regressor for example.
+#  tree regresser, nn, 
 # Please ask me anything about this project. You can either work individually or team with one other student
 # to complete this project.
 # 
 # You/your team need to create a github repo (private) and add myself (physicsland) as a collaborator. 
 # Please setup an appropriate .gitignore as the first thing when you create a repo. 
 # 
-# 
+# do we have to perform feature selection 
 
+#https://support.sas.com/content/dam/SAS/support/en/books/sas-certification-prep-guide-statistical-business-analysis-using-sas-9/69531_appendices.pdf
+
+#nominal 
+# MSZoning, Street, Alley, LotShape, LandContour,
+#  Utilities, LotConfig, LandSlope, Neighborhood,
+# Condition1,	Condition2,	BldgType, HouseStyle, RoofStyle, RoofMatl,
+# Exterior1st,	Exterior2nd,MasVnrType,
+# Foundation,	, BsmtExposure	BsmtFinType1
+# BsmtFinType2, Heating,	 Electrical
+# GarageType,  
+# Fence,MiscFeature, SaleType,  SaleCondition
+
+#Ex = Excellent, Gd = Good , TA = Typical, Fa = Fair, Po = Poor
+
+#Ex = Excellent (100+ inches), Gd = Good (90-99 inches),
+ #TA = Typical (80-89 inches), Fa = Fair (70-79 inches),
+ #Po = Poor (<70 inches), NA = No Basement
+
+ #Ex = Excellent, Gd = Good, TA = Average/Typical, Fa = Fair, Po = Poor
+
+#Typ = Typical Functionality, Min1 = Minor Deductions 1, Min2 = Minor Deductions 2, Mod = Moderate Deductions,
+ #Maj1 = Major Deductions 1, Maj2 = Major Deductions 2,
+ #Sev = Severely Damaged, Sal = Salvage only
+
+Fireplace quality:
+ Ex = Excellent - Exceptional Masonry Fireplace
+ Gd = Good - Masonry Fireplace in main level
+ TA = Average - Prefabricated Fireplace in main living area or Masonry Fireplace in basement
+ Fa = Fair - Prefabricated Fireplace in basement
+ Po = Poor - Ben Franklin Stove
+ NA = No Fireplace
+
+Interior finish of the garage:
+ Fin = Finished, RFn = Rough Finished, Unf = Unfinished,
+ NA = No Garage
+
+#ordinal
+# ExterQual, ExterCond
+#BsmtQual,	BsmtCond
+#HeatingQC, KitchenQual,
+# Functional, FireplaceQu, 
+# CentralAir, PavedDrive, 
+# GarageFinish, GarageQual,GarageCond
+# PoolQC	
 
 #%%
-print("\nReady to continue.")
+# Drop nominal 
+columns_drop = [
+    'MSZoning', 'Street', 'Alley', 'LotShape', 'LandContour',
+ 'Utilities', 'LotConfig', 'LandSlope', 'Neighborhood',
+  'Condition1',	'Condition2',	'BldgType', 'HouseStyle', 'RoofStyle', 'RoofMatl',
+ 'Exterior1st',	'Exterior2nd','MasVnrType',
+  'Foundation',	'BsmtExposure',	'BsmtFinType1',
+ 'BsmtFinType2', 'Heating',	 'Electrical',
+ 'GarageType',  'Fence', 'MiscFeature', 'SaleType',  'SaleCondition'
+]
+df = df.drop(columns=columns_drop)
 
+#%%
+#Convert ordinal 
+ordinal_columns = [
+    
+]
+ordinal_mapping = {
+    "NA": 0, "Po": 1, "Fa": 2, "TA": 3, "Gd": 4, "Ex": 5
+}
+funational_mapping = {
+ 'Sal': 0, 'Sev':1,  'Maj2':2, 'Maj1':3, 'Mod':4, 'Min2':5, 'Min1':6, 'Typ':7
+}
+centralair_mapping = {
+    'N': 0, 'Y': 1
+}
 #%%
 
 class sknn:
@@ -138,7 +208,6 @@ class sknn:
         self.__scaleFactors = None # numpy array. always calculate from self.__setExpos2Scales
         self.__setExpos2Scales([]) # will set the initial self.scaleExpos and self.__scaleFactors
         # self.__gradients = [] # partial y/partial exponents (instead of partial scaling factors)
-        
         # set sklearn knnmodel objects, train, and get benchmark scores on test data
         self.__knnmodels = [np.nan, np.nan] # matching index value as k value
         for i in range(2,self.__kmax +1): 
@@ -146,14 +215,12 @@ class sknn:
                 self.__knnmodels.append( KNeighborsClassifier(n_neighbors=i, weights='uniform').fit(self.X_train, self.y_train ) )
             else: 
                 self.__knnmodels.append( KNeighborsRegressor(n_neighbors=i, weights='uniform').fit(self.X_train, self.y_train ) ) # TODO
-        self.benchmarkScores = [np.nan, np.nan] +  [ round(x.score(self.X_test, self.y_test ), self.__scoredigits) for x in self.__knnmodels[2:] ]
-        print(f'These are the basic k-NN scores for different k-values: {repr(self.benchmarkScores)}, where no individual feature scaling is performed.') 
-        
+        self.benchmarkScores = [np.nan, np.nan] +  [round(x.score(self.X_test, self.y_test ), self.__scoredigits) for x in self.__knnmodels[2:] ]
+        print(f'These are the basic k-NN scores for different k-values:{repr(self.benchmarkScores)}, where no individual feature scaling is performed.') 
         # set pandas df to save some results
         # self.__resultsDF = None
-        
+
     # END constructor
-    
     def zXform(self):
         '''
         standardize all the features (if zscale=True). Should standardize/scale before train-test split
@@ -163,7 +230,6 @@ class sknn:
         scaler = StandardScaler()
         self.data_xz = scaler.fit_transform(self.data_x)  # data_x can be ndarray or pandas df, data_xz will be ndarray
         return
-    
     def traintestsplit(self):
         '''
         train-test split, 50-50 as default
@@ -175,7 +241,6 @@ class sknn:
         dy = self.data_y.values if (isinstance(self.data_y, pd.core.series.Series) or isinstance(self.data_y, pd.core.frame.DataFrame)) else self.data_y # if (isinstance(data_y, np.ndarray)) # the default
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(self.data_xz, dy, test_size=self.__ttsplit, random_state = self.__seed)
         # these four sets should be all numpy ndarrays.
-
         nrows_Xtest, self.__xdim = self.X_test.shape  # total rows and columns in X_test. # not needed for nrows
         # notice that 
         # self.__xdim == self.X_test.shape[1]   # True
@@ -199,20 +264,20 @@ class sknn:
         """
         set Scaling Exponents, a tuple or list
         Should make sure expos is centered (using __shiftCenter)
-
         Args:
             expos (list, optional): _description_. Defaults to [], should match number of features in data_x
         """
-
         # Can add more checks to ensure expos is numeric list/tuple
         if (len(expos) != self.__xdim):
             self.__scaleExpos = np.zeros(self.__xdim) # tuple, exp(tuple) gives the scaling factors.
-            if self.__xdim >1: 
+            if self.__xdim > 1: 
                 self.__scaleExpos[0] = 1
                 self.__scaleExpos[1] = -1
         else:
             self.__scaleExpos =  expos
         self.__scaleFactors = np.array( [ math.exp(i) for i in self.__scaleExpos ] ) # numpy array
+        # find gradient direction 
+        # have 
         return
     
     def __shiftCenter(self, expos = []):
@@ -300,7 +365,7 @@ class sknn:
             # 1. grad = 0, stop (built into __setNewExposFromGrad)
             # 2. grad parallel to (1,1,1,...,1) direction, stop.
             # 3. maxiter reached, stop. (end of loop)
-            # 4. ?? dy < tol, stop??            # 
+            # 4. ?? dy < tol, stop??# 
             result = self.__setNewExposFromGrad(grad)
             if (i<10 or i%skip_n==0 ): print(f"i: {i}, |grad|^2={np.dot(grad,grad)}, \ngrad= {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
             if not result: break
