@@ -399,23 +399,23 @@ class sknn:
         if np.allclose(grad, self.__vector0, atol=self.__atol): 
             print(f"Gradient is zero or trivial: {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
             return False
-        norm = np.sqrt( np.dot(grad,grad) )
+        #norm = np.sqrt( np.dot(grad,grad) )
+        norm = np.linalg.norm(grad) 
         deltaexpos = grad / norm * self.learning_rate
         self.__scaleExpos += deltaexpos
         self.__setExpos2Scales(self.__scaleExpos)
         return True
 
     def optimize(self, scaleExpos_init = (), maxiter = 0, learning_rate=0):
+        from concurrent.futures import ThreadPoolExecutor
         """
         Optimizing scaling exponents and scaling factors
 
         Args:
             scaleExpos_init (np array, optional): initial search vector. Defaults to empty.
             maxiter (int, optional): max iteration. Defaults to 1e5.
-            learning_rate (float, optional): learning_rate. Defaults to 0 or self.learning_rate
-        """
-
-        maxi = max( self.max_iter, maxiter, 1000)
+            learning_rate (float, optional): learning_rate. Defaults to 0 or self.learning_rate 
+            maxi = max( self.max_iter, maxiter, 1000)
         skip_n = 100 # rule of thumb math.floor(1/learning_rate)
         expos = scaleExpos_init 
         if (len(scaleExpos_init) == self.__xdim): self.__scaleExpos = scaleExpos_init # assumes the new input is the desired region.
@@ -434,6 +434,56 @@ class sknn:
         if i==maxi-1: print(f"max iter reached. Current |grad|^2={np.dot(grad,grad)}, \ngrad= {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
             
 
+        """
+        """
+    Optimized: Parallelize gradient evaluation and streamline iterations.
+    """
+        maxi = max(self.max_iter, maxiter, 1000)
+        skip_n =  100 # max(1, int(1 / learning_rate))Avoid division by zero; dynamically calculate logging interval.
+        expos = scaleExpos_init
+        if len(scaleExpos_init) == self.__xdim:
+            self.__scaleExpos = scaleExpos_init  # Initialize with provided scaling exponents.
+        print(f"Begin Optimization:\n"
+            f"__scaleExpos= {self.__scaleExpos}, \n"
+            f"__scaleFactors= {self.__scaleFactors}, \n"
+            f"Model score-train: {self.scorethis(use='train')}, \n"
+            f"Model score-test: {self.scorethis(use='test')}, \n"
+            f"maxi= {maxi}, k= {self.k}, learning_rate= {learning_rate or self.learning_rate}\n")
+        for i in range(maxi):
+            # Parallelize gradient computation
+            with ThreadPoolExecutor() as executor:
+                grad = np.array(list(executor.map(
+                    lambda idx: self.__eval1Gradient(idx, learning_rate, use='train'),
+                    range(self.__xdim)
+                )))
+            # Update exponents based on gradient
+            result = self.__setNewExposFromGrad(grad)
+            # Periodic logging
+            if i % skip_n == 0:
+                grad_norm_sq = np.dot(grad, grad)
+                print(f"Iteration: {i}, Gradient Norm²= {grad_norm_sq}, \n"
+                    f"Gradient= {grad}, \n"
+                    f"__scaleExpos= {self.__scaleExpos}, \n"
+                    f"__scaleFactors= {self.__scaleFactors}, \n"
+                    f"Model score-train: {self.scorethis(use='train')}, \n"
+                    f"Model score-test: {self.scorethis(use='test')}\n")
+
+            # Stopping criteria: Gradient is zero or trivial
+            if not result:
+                print(f"Convergence achieved at iteration {i}. Stopping optimization.\n")
+                break
+
+        # Final iteration check
+        if i == maxi - 1:
+            grad_norm_sq = np.dot(grad, grad)
+            print(f"Maximum iterations reached. Final state:\n"
+                f"Gradient Norm²= {grad_norm_sq}, \n"
+                f"Gradient= {grad}, \n"
+                f"__scaleExpos= {self.__scaleExpos}, \n"
+                f"__scaleFactors= {self.__scaleFactors}, \n"
+                f"Model score-train: {self.scorethis(use='train')}, \n"
+                f"Model score-test: {self.scorethis(use='test')}\n")
+       
     def scorethis(self, scaleExpos = [], scaleFactors = [], use = 'test'):
         if len(scaleExpos)==self.__xdim :
             self.__setExpos2Scales( self.__shiftCenter(scaleExpos) )
@@ -463,12 +513,48 @@ houseprice.optimize()
 
 # %%
 # 3. Modify the sknn class to improve the algorithm performance, logic, or presentations.
-# tried different normalization 
-houseprice_opt = sknn(data_x=data_x, data_y=data_y, classifier = False, ttsplit=0.7, learning_rate_init=0.05)
-houseprice_opt.optimize()
+# tried different normalization techniques  like minimax and robus 
+# used cv to find best k value before gradient descent, best k = 
+# increased learning rate
 
+# with cv finding best k = 9
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.01)
+houseprice.optimize()
+#result 
+#model score-train is 0.8315716005454094, 
+#score-test is 0.8015295080076016
+
+#%%
+#change learning rate to 0.05 
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.05)
+houseprice.optimize()
+#model score-train is 0.85823177667169, 
+#score-test is 0.8177596265235567
+
+#%%
+#change learning rate to 0.1
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.1)
+houseprice.optimize()
+
+#%%
+#try minimax 
+houseprice = sknn(data_x=data_x, data_y=data_y, scaler = "MinMax", classifier = False, learning_rate_init=0.05)
+houseprice.optimize()
+# best k = 5
+# model score-train is 0.85823177667169, 
+#score-test is 0.8177596265235567
+
+#%%
+#try robust 
+houseprice = sknn(data_x=data_x, data_y=data_y, scaler = "Robust", classifier = False, learning_rate_init=0.05)
+houseprice.optimize()
+# best k = 20 
+# model score-train is 0.6381765801124846, 
+#score-test is 0.6737153363216505
 
 # 3. Find optimized scaling factors for the features for the best model score.
+# final model 
+
 
 
 
@@ -483,3 +569,6 @@ houseprice_opt.optimize()
 # multiple linear regression, tree regression, NN, PCR 
 # 
 # %%
+# Conclusion 
+# If I want to maximize the score, I will keep many of the nominal variables that I deleted, especially "Neighborhood", as house prices are usually 
+# highly dependent on location.
