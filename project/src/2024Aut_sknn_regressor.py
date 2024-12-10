@@ -348,6 +348,7 @@ class sknn:
             expos (np array, optional): array of scaling exponents. Defaults to [].
         """
         return expos.copy() - expos.sum()/len(expos) if len(expos) > 1 else expos.copy()
+       # return expos.copy()if len(expos) > 1 else expos.copy()
         
 
     def __evalGradients(self, learning_rate=0, use = 'test'):
@@ -400,11 +401,49 @@ class sknn:
             print(f"Gradient is zero or trivial: {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
             return False
         #norm = np.sqrt( np.dot(grad,grad) )
-        norm = np.linalg.norm(grad) 
+        norm = np.linalg.norm(grad) #more efficient than np.sqrt( np.dot(grad,grad) )
         deltaexpos = grad / norm * self.learning_rate
         self.__scaleExpos += deltaexpos
         self.__setExpos2Scales(self.__scaleExpos)
         return True
+    
+    def optimize_lr(self, scaleExpos_init = (), maxiter = 0, learning_rate=0.01,patience=10, decay_rate=0.005, min_lr=1e-5):
+        """
+        Optimizing learning rate dynamically based on 
+        """
+        maxi = max( self.max_iter, maxiter, 1000)
+        skip_n = 50 # rule of thumb math.floor(1/learning_rate)
+        expos = scaleExpos_init 
+        best_test_score = float('inf')
+        no_improve_count = 0
+        if (len(scaleExpos_init) == self.__xdim): self.__scaleExpos = scaleExpos_init # assumes the new input is the desired region.
+        print(f"Begin: \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}, \nmaxi= {maxi}, k={self.k}, learning_rate={self.learning_rate}\n")
+        for i in range(maxi):
+            grad = self.__evalGradients(learning_rate, use='train')        
+            result = self.__setNewExposFromGrad(grad)
+            current_test_score = self.scorethis(use='test')
+            if current_test_score < best_test_score:
+                best_test_score = current_test_score
+                no_improve_count = 0 
+            else:
+                no_improve_count +=1 
+            
+            if no_improve_count >= patience:
+                learning_rate = max(learning_rate *(1-decay_rate), min_lr)
+                no_improve_count = 0
+                print(f"Reduced learning rate to {learning_rate}")
+
+            if (i<10 or i%skip_n==0 ): print(f"i: {i}, |grad|^2={np.dot(grad,grad)}, \ngrad= {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
+            if (self.scorethis(use='train')<=0): 
+                print(f"Model score is negative. Stopping at iteration {i}.")
+                break
+            if not result: 
+                print(f"Convergence achieved at iteration {i}.")
+                break
+            
+        if i==maxi-1:
+            print(f"max iter reached. Current |grad|^2={np.dot(grad,grad)}, \ngrad= {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
+            
 
     def optimize(self, scaleExpos_init = (), maxiter = 0, learning_rate=0):
         from concurrent.futures import ThreadPoolExecutor
@@ -414,8 +453,10 @@ class sknn:
         Args:
             scaleExpos_init (np array, optional): initial search vector. Defaults to empty.
             maxiter (int, optional): max iteration. Defaults to 1e5.
-            learning_rate (float, optional): learning_rate. Defaults to 0 or self.learning_rate 
-            maxi = max( self.max_iter, maxiter, 1000)
+            learning_rate (float, optional): learning_rate. Defaults to 0 or self.learning_rate
+        """
+
+        maxi = max( self.max_iter, maxiter, 1000)
         skip_n = 100 # rule of thumb math.floor(1/learning_rate)
         expos = scaleExpos_init 
         if (len(scaleExpos_init) == self.__xdim): self.__scaleExpos = scaleExpos_init # assumes the new input is the desired region.
@@ -429,62 +470,16 @@ class sknn:
             # 4. ?? dy < tol, stop??# 
             result = self.__setNewExposFromGrad(grad)
             if (i%skip_n==0 ): print(f"i: {i}, |grad|^2={np.dot(grad,grad)}, \ngrad= {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
+            if (self.scorethis(use='train')<=0): 
+                print(f"Model score is negative. Stopping at iteration {i}.")
+                break
             if not result: break
-            
+
+
         if i==maxi-1: print(f"max iter reached. Current |grad|^2={np.dot(grad,grad)}, \ngrad= {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
             
 
-        """
-        """
-    Optimized: Parallelize gradient evaluation and streamline iterations.
-    """
-        maxi = max(self.max_iter, maxiter, 1000)
-        skip_n =  100 # max(1, int(1 / learning_rate))Avoid division by zero; dynamically calculate logging interval.
-        expos = scaleExpos_init
-        if len(scaleExpos_init) == self.__xdim:
-            self.__scaleExpos = scaleExpos_init  # Initialize with provided scaling exponents.
-        print(f"Begin Optimization:\n"
-            f"__scaleExpos= {self.__scaleExpos}, \n"
-            f"__scaleFactors= {self.__scaleFactors}, \n"
-            f"Model score-train: {self.scorethis(use='train')}, \n"
-            f"Model score-test: {self.scorethis(use='test')}, \n"
-            f"maxi= {maxi}, k= {self.k}, learning_rate= {learning_rate or self.learning_rate}\n")
-        for i in range(maxi):
-            # Parallelize gradient computation
-            with ThreadPoolExecutor() as executor:
-                grad = np.array(list(executor.map(
-                    lambda idx: self.__eval1Gradient(idx, learning_rate, use='train'),
-                    range(self.__xdim)
-                )))
-            # Update exponents based on gradient
-            result = self.__setNewExposFromGrad(grad)
-            # Periodic logging
-            if i % skip_n == 0:
-                grad_norm_sq = np.dot(grad, grad)
-                print(f"Iteration: {i}, Gradient Norm²= {grad_norm_sq}, \n"
-                    f"Gradient= {grad}, \n"
-                    f"__scaleExpos= {self.__scaleExpos}, \n"
-                    f"__scaleFactors= {self.__scaleFactors}, \n"
-                    f"Model score-train: {self.scorethis(use='train')}, \n"
-                    f"Model score-test: {self.scorethis(use='test')}\n")
-
-            # Stopping criteria: Gradient is zero or trivial
-            if not result:
-                print(f"Convergence achieved at iteration {i}. Stopping optimization.\n")
-                break
-
-        # Final iteration check
-        if i == maxi - 1:
-            grad_norm_sq = np.dot(grad, grad)
-            print(f"Maximum iterations reached. Final state:\n"
-                f"Gradient Norm²= {grad_norm_sq}, \n"
-                f"Gradient= {grad}, \n"
-                f"__scaleExpos= {self.__scaleExpos}, \n"
-                f"__scaleFactors= {self.__scaleFactors}, \n"
-                f"Model score-train: {self.scorethis(use='train')}, \n"
-                f"Model score-test: {self.scorethis(use='test')}\n")
-       
-    def scorethis(self, scaleExpos = [], scaleFactors = [], use = 'test'):
+    def scorethis(self, scaleExpos = [], scaleFactors = [], use = 'test', lambda_reg=0.00, regularization='L1'):
         if len(scaleExpos)==self.__xdim :
             self.__setExpos2Scales( self.__shiftCenter(scaleExpos) )
         # elif len(scaleFactors)==self.__xdim:
@@ -499,7 +494,15 @@ class sknn:
         # For optimizing/tuning the scaling factors, use the train set to tune. 
         newscore = self.__knnmodels[self.k].score(sfactors*self.X_train, self.y_train) if use=='train' else self.__knnmodels[self.k].score(sfactors*self.X_test, self.y_test)
         return newscore
+        #if regularization == 'L2':
+         #  penalty = lambda_reg * np.sum(np.array(self.__scaleExpos)**2)  # L2 penalty
+        #elif regularization == 'L1':
+         #   penalty = lambda_reg * np.sum(np.abs(np.array(self.__scaleExpos)))  # L1 penalty
+        #else:
+         #raise ValueError(f"Unknown regularization type: {regularization}")
 
+       # Return regularized score
+        #return newscore - penalty
 ###### END class sknn
 
 #%%
@@ -537,12 +540,13 @@ houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rat
 houseprice.optimize()
 
 #%%
-#try minimax 
-houseprice = sknn(data_x=data_x, data_y=data_y, scaler = "MinMax", classifier = False, learning_rate_init=0.05)
+#modified the sknn class to include other data normalization method: minimax, robust
+houseprice = sknn(data_x=data_x, data_y=data_y, scaler = "MinMax", classifier = False, learning_rate_init=0.05, max_iter=400)
 houseprice.optimize()
 # best k = 5
-# model score-train is 0.85823177667169, 
-#score-test is 0.8177596265235567
+#model score-train is 0.8409528386581798, 
+#score-test is 0.814768172231965
+
 
 #%%
 #try robust 
@@ -551,9 +555,46 @@ houseprice.optimize()
 # best k = 20 
 # model score-train is 0.6381765801124846, 
 #score-test is 0.6737153363216505
+# both normalization methods were not better than Z-transform 
 
-# 3. Find optimized scaling factors for the features for the best model score.
+#%%
+#adding regularziation to the scaling factors , l2, lambda = 0.01
+# performmance got worse 
+#model score-train is 0.8293858726948979, 
+#score-test is 0.728466692208353
+# adding L1 regularization, lambda = 0.01
+#model score-train is 0.8135693500484253, 
+#score-test is 0.7814351285190857
+# L1 score is better but not as good as without regularization, and is worse than benchmark score 
+# this is likely because normalization is already applied by making the scaling factors sum to 1.
+
+#%%
+#got rid of summing to 0 normalization and using L1 regularization 
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.05)
+houseprice.optimize()
+#the result turned out worse (negative) and scaleExpos was really large
+
+#%%
+#dynamic learning rate
+# reduce leraning rate if no improvement after 10 iterations (patience = 10), decay rate = 0.005, min_lr = 1e-5
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.01)
+houseprice.optimize_lr()
+# the process took a lot longer to converge as learning rate was reduced from 0.01 to <0.007
+
+
+
+
+
+
+#making the code more efficient 
+
+
+
+#%%
 # final model 
+# 3. Find optimized scaling factors for the features for the best model score.
+
+
 
 
 
@@ -561,7 +602,7 @@ houseprice.optimize()
 # 4. Modify the sknn class to save some results 
 # (such as scores, scaling factors, gradients, 
 #  etc, at various points, like every 100 epoch).
-
+# modified the class to save result at every 100th epoch, and 
 
 
 # 5. Compare the results of the optimized scaling factors to Feature Importance
