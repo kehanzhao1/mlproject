@@ -88,12 +88,14 @@ df = pd.read_csv(f'..{os.sep}data{os.sep}HousePricesAdv{os.sep}train.csv', heade
 # Drop nominal 
 columns_drop = [
 'MSZoning', 'Street', 'Alley', 'LotShape', 'LandContour',
-'Utilities', 'LotConfig', 'LandSlope', 'Neighborhood',
+'Utilities', 'LotConfig', 'LandSlope', 
 'Condition1',	'Condition2',	'BldgType', 'HouseStyle', 'RoofStyle', 'RoofMatl',
 'Exterior1st',	'Exterior2nd','MasVnrType',
 'Foundation',	'BsmtExposure',	'BsmtFinType1',
 'BsmtFinType2', 'Heating',	 'Electrical',
 'GarageType',  'Fence', 'MiscFeature', 'SaleType',  'SaleCondition'
+,'Neighborhood'
+
 ]
 df = df.drop(columns=columns_drop)
 
@@ -127,9 +129,12 @@ df['PavedDrive'] = df['PavedDrive'].map(paveddrive_mapping)
 df['GarageFinish'] = df['GarageFinish'].map(garagefinish_mapping)
 
 #%%
+#df = pd.get_dummies(df, columns=['Neighborhood'])
+
+#%%
 df.shape[1]
-data_x = df.iloc[:, 0:50] # data_x is pandas df here, 
-data_y = df.iloc[:, 51] 
+data_x = df.drop(columns=['SalePrice'])# data_x is pandas df here, 
+data_y = df['SalePrice'] # data_y is pandas series here
 
 #%%
 nan_counts = data_x.isna().sum()
@@ -179,6 +184,8 @@ class sknn:
                     learning_rate_init = 0.5, 
                     atol = 1e-8, 
                     scaler = 'Ztransform' ,
+                    weight = 'uniform', #'inverse, gaussian
+                    metric = 'minkowski', #'euclidean', 'manhattan', chebyshev, 
                     cv=5) :
         """
         Scaling kNN model, using scaling parameter for each feature to infer feature importance and other info about the manifold of the feature space.
@@ -213,6 +220,8 @@ class sknn:
         self.__atol = atol
         self.cv = cv 
         self.scaler = scaler 
+        self.weight = weight
+        self.metric = metric
 
         # prep data
         self.data_x = data_x
@@ -243,15 +252,29 @@ class sknn:
         # self.__gradients = [] # partial y/partial exponents (instead of partial scaling factors)
         # set sklearn knnmodel objects, train, and get benchmark scores on test data
         self.__knnmodels = [np.nan, np.nan] # matching index value as k value
+        def inverse_weights(distances):
+             return 1 / (distances + 1e-5)
+
+        def gaussian_weights(distances):
+            return np.exp(-distances**2 / (2 * 1**2))
+
         for i in range(2,self.__kmax +1): 
             if (self.__classifierTF): 
-                self.__knnmodels.append( KNeighborsClassifier(n_neighbors=i, weights='uniform').fit(self.X_train, self.y_train ) )
-            else: 
-                self.__knnmodels.append( KNeighborsRegressor(n_neighbors=i, weights='uniform').fit(self.X_train, self.y_train ) ) # TODO
+                self.__knnmodels.append( KNeighborsClassifier(n_neighbors=i, weights=self.weight, metric=self.metric).fit(self.X_train, self.y_train ) )
+            else:
+                if (self.weight == 'uniform'): 
+                    self.__knnmodels.append( KNeighborsRegressor(n_neighbors=i, weights="uniform", metric=self.metric).fit(self.X_train, self.y_train ) ) # TODO
+                elif (self.weight == 'inverse'):
+                    self.__knnmodels.append( KNeighborsRegressor(n_neighbors=i, weights=inverse_weights, metric=self.metric).fit(self.X_train, self.y_train ) ) 
+                elif (self.weight == 'gaussian'):
+                    self.__knnmodels.append( KNeighborsRegressor(n_neighbors=i, weights=gaussian_weights, metric=self.metric).fit(self.X_train, self.y_train ) ) 
+       
+       
         self.benchmarkScores = [np.nan, np.nan] +  [round(x.score(self.X_test, self.y_test ), self.__scoredigits) for x in self.__knnmodels[2:] ]
         print(f'These are the basic k-NN scores for different k-values:{repr(self.benchmarkScores)}, where no individual feature scaling is performed.') 
         # set pandas df to save some results
         # self.__resultsDF = None
+  
 
     # END constructor
     def zXform(self): 
@@ -407,7 +430,7 @@ class sknn:
         self.__setExpos2Scales(self.__scaleExpos)
         return True
     
-    def optimize_lr(self, scaleExpos_init = (), maxiter = 0, learning_rate=0.01,patience=10, decay_rate=0.005, min_lr=1e-5):
+    def optimize_lr(self, scaleExpos_init = (), maxiter = 0, learning_rate=0.1,patience=20, decay_rate=0.01, min_lr=1e-5):
         """
         Optimizing learning rate dynamically based on 
         """
@@ -494,6 +517,7 @@ class sknn:
         # For optimizing/tuning the scaling factors, use the train set to tune. 
         newscore = self.__knnmodels[self.k].score(sfactors*self.X_train, self.y_train) if use=='train' else self.__knnmodels[self.k].score(sfactors*self.X_test, self.y_test)
         return newscore
+        # try regularization 
         #if regularization == 'L2':
          #  penalty = lambda_reg * np.sum(np.array(self.__scaleExpos)**2)  # L2 penalty
         #elif regularization == 'L1':
@@ -579,15 +603,74 @@ houseprice.optimize()
 # reduce leraning rate if no improvement after 10 iterations (patience = 10), decay rate = 0.005, min_lr = 1e-5
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.01)
 houseprice.optimize_lr()
-# the process took a lot longer to converge as learning rate was reduced from 0.01 to <0.007
+# the process took a lot longer to converge as learning rate was reduced from 0.01 to <0.005
+# it likely got stuck in local minimum and did not converge to lowest test error
+# final score is not better than constant 
+# model score-train is 0.8315716005454094, 
+# score-test is 0.8015295080076016
+
+#%%
+#dynamic learning rate with starting 0.1, decay rate = 0.01 
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.1)
+houseprice.optimize_lr()
+#model score-train is 0.8409528386581798, 
+#score-test is 0.814768172231965
+#Reduced learning rate to 0.06622820409839833
+
+#%%
+#increasing patience to 20, starting at 0.2
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.4)
+houseprice.optimize_lr()
+#model score-train is 0.8547204387477961, 
+#score-test is 0.8105462837499338
+#Reduced learning rate to 0.0941480149401
+
+#%%
+# add dynamic weighting for different neighbours 
+# we know from cross validation that 9 neighbours produce the best result, we can also change the influence of closer 
+# neighbours to be higher than those further away 
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, weight = "inverse", learning_rate_init=0.4)
+houseprice.optimize_lr()
+#the result is there is very high training score due to overfitting, and test score is lower than benchmark
+#model score-train is 0.9412040973633723, 
+#score-test is 0.7832071527170309
+#Reduced learning rate to 0.07177305325982747
+#%%
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, weight = "gaussian", learning_rate_init=0.4)
+houseprice.optimize_lr()
+#even more overfitting 
+#model score-train is 0.9997081381572372, 
+#score-test is 0.7339574104181359
+
+#%%
+#changing distance metric calculation 
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, metric = "euclidean", learning_rate_init=0.5)
+houseprice.optimize()
+#model score-train is 0.8178476178306388, 
+#score-test is 0.7982869840567368
+#%%
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, metric = "manhattan", learning_rate_init=0.5)
+houseprice.optimize()
+
+#%%
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, metric = "manhattan", learning_rate_init=0.5)
+houseprice.optimize_lr()
+#model score-train is 0.8551569338216636, 
+#score-test is 0.8413870789984825
+#Model score is negative. Stopping at iteration 32.
+#%%
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, metric = "hamming", learning_rate_init=0.5)
+houseprice.optimize_lr()
+# other distance metrics did not perform as well as manhattan
+
+# added back neighbourhood with one-hot encoding
+# the number of optimal neighbours 
 
 
-
-
-
-
-#making the code more efficient 
-
+#%%
+# making the code more efficient 
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, metric = "manhattan",learning_rate_init=0.5)
+houseprice.optimize_lr()
 
 
 #%%
