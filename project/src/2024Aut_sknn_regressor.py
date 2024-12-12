@@ -930,3 +930,7 @@ comparison.to_csv('feature_importance_comparison.csv', index=False)
 # it is less dependent on smaller amenities like heating, central air, front porch, fire palces. However, since test score is optimized in all of the models, the models treated different variables 
 # differently. If the variables are correlated, their importance could be widely different in each models, which reduces interpretability. 
 # surprisingly year sold has not come up as an important features across models, but likely a different encoding is needed for that variable. 
+
+#future improvement 
+# I could also try adjusting feature importance based on results from other models such as linear regression, PCR and regression tree. 
+# I could also delete highly correlated features or use domain knowledge of house prices to scale the features. 
