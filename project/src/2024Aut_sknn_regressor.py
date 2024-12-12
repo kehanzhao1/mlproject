@@ -42,7 +42,7 @@ df = pd.read_csv(f'..{os.sep}data{os.sep}HousePricesAdv{os.sep}train.csv', heade
 # 
 # do we have to perform feature selection 
 
-
+# selecting nominal and ordinal features 
 #https://support.sas.com/content/dam/SAS/support/en/books/sas-certification-prep-guide-statistical-business-analysis-using-sas-9/69531_appendices.pdf
 
 #nominal 
@@ -55,14 +55,12 @@ df = pd.read_csv(f'..{os.sep}data{os.sep}HousePricesAdv{os.sep}train.csv', heade
 # GarageType,  
 # Fence,MiscFeature, SaleType,  SaleCondition
 
+# ordinal coding
 #Ex = Excellent, Gd = Good , TA = Typical, Fa = Fair, Po = Poor
-
 #Ex = Excellent (100+ inches), Gd = Good (90-99 inches),
 #TA = Typical (80-89 inches), Fa = Fair (70-79 inches),
 #Po = Poor (<70 inches), NA = No Basement
-
 #Ex = Excellent, Gd = Good, TA = Average/Typical, Fa = Fair, Po = Poor
-
 #Typ = Typical Functionality, Min1 = Minor Deductions 1, Min2 = Minor Deductions 2, Mod = Moderate Deductions,
 #Maj1 = Major Deductions 1, Maj2 = Major Deductions 2,
 #Sev = Severely Damaged, Sal = Salvage only
@@ -87,7 +85,7 @@ df = pd.read_csv(f'..{os.sep}data{os.sep}HousePricesAdv{os.sep}train.csv', heade
 #%%
 # Drop nominal 
 columns_drop = [
-'MSZoning', 'Street', 'Alley', 'LotShape', 'LandContour',
+"Id", 'MSZoning', 'Street', 'Alley', 'LotShape', 'LandContour',
 'Utilities', 'LotConfig', 'LandSlope', 
 'Condition1',	'Condition2',	'BldgType', 'HouseStyle', 'RoofStyle', 'RoofMatl',
 'Exterior1st',	'Exterior2nd','MasVnrType',
@@ -177,13 +175,13 @@ class sknn:
                     zscale=True, 
                     caleExpos_init = (), 
                     scales_init = (), 
-                    ttsplit=0.5, 
+                    ttsplit=0.7, 
                     max_iter = 100, 
                     seed=1, 
                     scoredigits = 6, 
                     learning_rate_init = 0.5, 
                     atol = 1e-8, 
-                    scaler = 'Ztransform' ,
+                    scaler = 'Ztransform' , #'MinMax', 'Robust'
                     weight = 'uniform', #'inverse, gaussian
                     metric = 'minkowski', #'euclidean', 'manhattan', chebyshev, 
                     cv=5) :
@@ -398,12 +396,14 @@ class sknn:
             use (str, optional): use 'test' (default) or 'train' dataset to score. 
         """
         thescale = self.__scaleExpos[i]
-        thestep = max(learning_rate, self.learning_rate, abs(thescale)*self.learning_rate ) # modify step value appropriately if needed.
+        thestep = max(learning_rate, self.learning_rate, abs(thescale)*self.learning_rate )
+        # modify step value appropriately if needed.
         # maxexpo = thescale + thestep/2
         # minexpo = thescale - thestep/2
-        maxexpos = self.__scaleExpos.copy()
+        base_expos = self.__scaleExpos.copy()
+        maxexpos = base_expos.copy()
         maxexpos[i] += thestep/2
-        minexpos = self.__scaleExpos.copy()
+        minexpos = base_expos.copy()
         minexpos[i] -= thestep/2
         slope = ( self.scorethis(scaleExpos=maxexpos, use=use) - self.scorethis(scaleExpos=minexpos, use=use) ) / thestep
         return slope
@@ -430,23 +430,41 @@ class sknn:
         self.__setExpos2Scales(self.__scaleExpos)
         return True
     
-    def optimize_lr(self, scaleExpos_init = (), maxiter = 0, learning_rate=0.1,patience=20, decay_rate=0.01, min_lr=1e-5):
+    def optimize_lr(self, scaleExpos_init = (), maxiter = 0, learning_rate=0.1,patience=10, decay_rate=0.01, min_lr=1e-5):
         """
         Optimizing learning rate dynamically based on 
         """
         maxi = max( self.max_iter, maxiter, 1000)
-        skip_n = 50 # rule of thumb math.floor(1/learning_rate)
+        skip_n = 1 # rule of thumb math.floor(1/learning_rate)
         expos = scaleExpos_init 
-        best_test_score = float('inf')
+        best_test_score = float('-inf')
         no_improve_count = 0
-        if (len(scaleExpos_init) == self.__xdim): self.__scaleExpos = scaleExpos_init # assumes the new input is the desired region.
+        if (len(scaleExpos_init) == self.__xdim): 
+            self.__scaleExpos = scaleExpos_init # assumes the new input is the desired region.
         print(f"Begin: \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}, \nmaxi= {maxi}, k={self.k}, learning_rate={self.learning_rate}\n")
+        log_data = []
+
+        initial_log = {
+            "iteration": "Begin",
+            "__scaleExpos": self.__scaleExpos.copy(),
+            "__scaleFactors": self.__scaleFactors.copy(),
+            "model_score_train": self.scorethis(use='train'),
+            "model_score_test": self.scorethis(use='test'),
+            "learning_rate": self.learning_rate,
+            "k_neighbours":self.k
+        }
+        log_data.append(initial_log)
+
+
         for i in range(maxi):
             grad = self.__evalGradients(learning_rate, use='train')        
             result = self.__setNewExposFromGrad(grad)
             current_test_score = self.scorethis(use='test')
-            if current_test_score < best_test_score:
+            if current_test_score > best_test_score:
                 best_test_score = current_test_score
+                best_model = self.__knnmodels[self.k]
+                best_scale_expos = self.__scaleExpos.copy()
+                best_scale_factors = self.__scaleFactors.copy()
                 no_improve_count = 0 
             else:
                 no_improve_count +=1 
@@ -456,7 +474,21 @@ class sknn:
                 no_improve_count = 0
                 print(f"Reduced learning rate to {learning_rate}")
 
-            if (i<10 or i%skip_n==0 ): print(f"i: {i}, |grad|^2={np.dot(grad,grad)}, \ngrad= {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
+            if (i<10 or i%skip_n==0 ): 
+                log_entry = {
+                    "iteration": i,
+                    "grad": grad.copy(),
+                    "__scaleExpos": self.__scaleExpos.copy(),
+                    "__scaleFactors": self.__scaleFactors.copy(),
+                    "model_score_train": self.scorethis(use='train'),
+                    "model_score_test": self.scorethis(use='test'),
+                    "k_neighbours":self.k,
+                    "learning_rate": learning_rate
+
+                     
+                }
+                log_data.append(log_entry)
+                print(f"i: {i}, |grad|^2={np.dot(grad,grad)},\nlearning_rate={learning_rate}, \ngrad= {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
             if (self.scorethis(use='train')<=0): 
                 print(f"Model score is negative. Stopping at iteration {i}.")
                 break
@@ -464,9 +496,26 @@ class sknn:
                 print(f"Convergence achieved at iteration {i}.")
                 break
             
-        if i==maxi-1:
-            print(f"max iter reached. Current |grad|^2={np.dot(grad,grad)}, \ngrad= {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
-            
+            if i==maxi-1:
+                log_final = {
+                    "iteration": i,
+                    "grad": grad.copy(),
+                    "__scaleExpos": self.__scaleExpos.copy(),
+                    "__scaleFactors": self.__scaleFactors.copy(),
+                    "model_score_train": self.scorethis(use='train'),
+                    "model_score_test": self.scorethis(use='test'),
+                    "learning_rate": learning_rate
+                }
+                log_data.append(log_final)
+                print(f"max iter reached. Current |grad|^2={np.dot(grad,grad)},\nlearning_rate={learning_rate},  \ngrad= {grad}, \n__scaleExpos= {self.__scaleExpos}, \n__scaleFactors= {self.__scaleFactors}, \nmodel score-train is {self.scorethis(use='train')}, \nscore-test is {self.scorethis(use='test')}\n")
+        log_df = pd.DataFrame(log_data)
+
+        best_log_entry = log_df.loc[log_df['model_score_test'].idxmax()]
+        self.best_test_score = best_log_entry['model_score_test']
+        self.best_scale_expos = best_log_entry['__scaleExpos']
+        self.best_scale_factors = best_log_entry['__scaleFactors']
+        self.best_model_knn = best_log_entry['k_neighbours']
+        return log_df
 
     def optimize(self, scaleExpos_init = (), maxiter = 0, learning_rate=0):
         from concurrent.futures import ThreadPoolExecutor
@@ -529,21 +578,18 @@ class sknn:
         #return newscore - penalty
 ###### END class sknn
 
-#%%
+#########################################################################################################################
 #%%
 # 2. Modify the sknn class to perform K-NN regression.
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.01)
 houseprice.optimize()
 #model score-train is 0.8446867562702437, 
 #score-test is 0.7819467384489185
-
-
 # %%
 # 3. Modify the sknn class to improve the algorithm performance, logic, or presentations.
 # tried different normalization techniques  like minimax and robus 
 # used cv to find best k value before gradient descent, best k = 
 # increased learning rate
-
 # with cv finding best k = 9
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.01)
 houseprice.optimize()
@@ -571,7 +617,6 @@ houseprice.optimize()
 #model score-train is 0.8409528386581798, 
 #score-test is 0.814768172231965
 
-
 #%%
 #try robust 
 houseprice = sknn(data_x=data_x, data_y=data_y, scaler = "Robust", classifier = False, learning_rate_init=0.05)
@@ -582,24 +627,24 @@ houseprice.optimize()
 # both normalization methods were not better than Z-transform 
 
 #%%
-#adding regularziation to the scaling factors , l2, lambda = 0.01
+# tried adding regularziation to the scaling factors , l2, lambda = 0.01
 # performmance got worse 
 #model score-train is 0.8293858726948979, 
 #score-test is 0.728466692208353
-# adding L1 regularization, lambda = 0.01
+# also tried adding L1 regularization, lambda = 0.01
 #model score-train is 0.8135693500484253, 
 #score-test is 0.7814351285190857
 # L1 score is better but not as good as without regularization, and is worse than benchmark score 
 # this is likely because normalization is already applied by making the scaling factors sum to 1.
 
 #%%
-#got rid of summing to 0 normalization and using L1 regularization 
+#tried getting rid of summing to 0 normalization and using L1 regularization 
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.05)
 houseprice.optimize()
 #the result turned out worse (negative) and scaleExpos was really large
 
 #%%
-#dynamic learning rate
+# trying dynamic learning rate
 # reduce leraning rate if no improvement after 10 iterations (patience = 10), decay rate = 0.005, min_lr = 1e-5
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.01)
 houseprice.optimize_lr()
@@ -610,7 +655,7 @@ houseprice.optimize_lr()
 # score-test is 0.8015295080076016
 
 #%%
-#dynamic learning rate with starting 0.1, decay rate = 0.01 
+#modifying dynamic learning rate with starting 0.1, decay rate = 0.01 
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, learning_rate_init=0.1)
 houseprice.optimize_lr()
 #model score-train is 0.8409528386581798, 
@@ -626,9 +671,10 @@ houseprice.optimize_lr()
 #Reduced learning rate to 0.0941480149401
 
 #%%
-# add dynamic weighting for different neighbours 
+# Add dynamic weighting for different neighbours 
 # we know from cross validation that 9 neighbours produce the best result, we can also change the influence of closer 
 # neighbours to be higher than those further away 
+# inverse weighting
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, weight = "inverse", learning_rate_init=0.4)
 houseprice.optimize_lr()
 #the result is there is very high training score due to overfitting, and test score is lower than benchmark
@@ -636,6 +682,7 @@ houseprice.optimize_lr()
 #score-test is 0.7832071527170309
 #Reduced learning rate to 0.07177305325982747
 #%%
+#guassian weighting
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, weight = "gaussian", learning_rate_init=0.4)
 houseprice.optimize_lr()
 #even more overfitting 
@@ -649,50 +696,237 @@ houseprice.optimize()
 #model score-train is 0.8178476178306388, 
 #score-test is 0.7982869840567368
 #%%
+# manhattan distance
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, metric = "manhattan", learning_rate_init=0.5)
 houseprice.optimize()
 
 #%%
+# manhattan distance with dynamic learning rate -- best result!
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, metric = "manhattan", learning_rate_init=0.5)
 houseprice.optimize_lr()
 #model score-train is 0.8551569338216636, 
 #score-test is 0.8413870789984825
-#Model score is negative. Stopping at iteration 32.
+
 #%%
+# hamming distance 
 houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, metric = "hamming", learning_rate_init=0.5)
 houseprice.optimize_lr()
 # other distance metrics did not perform as well as manhattan
 
-# added back neighbourhood with one-hot encoding
+# tried adding back neighbourhood with one-hot encoding
 # the number of optimal neighbours 
 
 
 #%%
-# making the code more efficient 
-houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False, metric = "manhattan",learning_rate_init=0.5)
-houseprice.optimize_lr()
-
+# made the code more efficient and clean 
+# adding different print statement throughout iteration 
 
 #%%
 # final model 
 # 3. Find optimized scaling factors for the features for the best model score.
+houseprice = sknn(data_x=data_x, data_y=data_y, classifier = False,ttsplit=0.6, metric = "manhattan",learning_rate_init=0.5)
+#houseprice.optimize_lr()
+log_df = houseprice.optimize_lr()
 
+#%%
+print(f"best_test_score{houseprice.best_test_score}, \nbest_scale_expos{houseprice.best_scale_expos}, \nbest_scale_factors{houseprice.best_scale_factors}, \nbest_model_knn {houseprice.best_model_knn}")
 
-
-
-
-
+#%%
+# since scalefactor = exp(scaleExpos), we will only examine scalefactor
+# scale factor greater than 1 means amlifying feature importance whilst <1 means diminishing importance
+#best_test_score0.8487055176579418, 
+#best_scale_expos[ 0.7249798  -0.51326198  0.45673075  0.04537654 -0.01682784  0.93122211
+# -0.0933537   0.14122141 -0.01768083 -0.04669485 -0.13636263  0.1856856
+#  0.68238199 -0.49523016 -0.06706822 -0.59969028 -0.27406447  1.09397708
+# -1.12086949  0.24627757  0.54207801 -0.30436755 -0.32969212  0.31679999
+# -0.55508437  0.37848815 -0.08386592  0.6787443   0.72605799 -0.27914631
+#  0.66451742  0.72766119 -0.82331989 -0.08919716  0.01777066  0.75780944
+# -0.57493318 -0.44085043 -0.25297866 -0.37128638 -0.64142832 -0.31693702
+# -0.58118823 -0.38471164 -0.0691406   0.1482803   0.37533465 -0.21391778
+# -0.14824495], 
+#best_scale_factors[2.06468938 0.59853997 1.57890371 1.04642181 0.98331296 2.53760851
+# 0.91087127 1.15167961 0.98247456 0.95437858 0.87252617 1.20404365
+# 1.9785851  0.60943062 0.93513141 0.54898164 0.76028306 2.98612656
+# 0.32599622 1.2792546  1.71957645 0.73758972 0.71914511 1.37272799
+# 0.57402383 1.4600755  0.91955454 1.97140069 2.06691671 0.75642923
+# 1.94355237 2.07023306 0.43897189 0.91466522 1.0179295  2.13359733
+# 0.56274247 0.64348894 0.77648445 0.68984635 0.52653982 0.72837663
+# 0.55923347 0.68064688 0.93319546 1.15983796 1.45547841 0.80741476
+# 0.86221989], 
+#best_model_knn  12 neighbours 
+#Index(['MSSubClass', 'LotArea', 'OverallQual', 'OverallCond', 'YearBuilt',
+ #      'YearRemodAdd', 'MasVnrArea', 'ExterQual', 'ExterCond', 'BsmtQual',
+ #      'BsmtCond', 'BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF', 'TotalBsmtSF',
+ #      'HeatingQC', 'CentralAir', '1stFlrSF', '2ndFlrSF', 'LowQualFinSF',
+ #      'GrLivArea', 'BsmtFullBath', 'BsmtHalfBath', 'FullBath', 'HalfBath',
+ #      'BedroomAbvGr', 'KitchenAbvGr', 'KitchenQual', 'TotRmsAbvGrd',
+ #      'Functional', 'Fireplaces', 'FireplaceQu', 'GarageYrBlt',
+ #      'GarageFinish', 'GarageCars', 'GarageArea', 'GarageQual', 'GarageCond',
+ #      'PavedDrive', 'WoodDeckSF', 'OpenPorchSF', 'EnclosedPorch', '3SsnPorch',
+ #      'ScreenPorch', 'PoolArea', 'PoolQC', 'MiscVal', 'MoSold', 'YrSold'],
+ #     dtype='object')
+#%%
+knnfeatures = pd.DataFrame({'feature':data_x.columns, 'scale_factor':houseprice.best_scale_factors})
+knnfeatures_sort= knnfeatures.sort_values(by='scale_factor', ascending=False)
 # 4. Modify the sknn class to save some results 
 # (such as scores, scaling factors, gradients, 
 #  etc, at various points, like every 100 epoch).
-# modified the class to save result at every 100th epoch, and 
+# save as csv 
+# modified the class to save result at every epoch for optimize_lr(), and also saving intermediate learning rate, the best neighbour from cv
 
-
+#%%
+large_features = (knnfeatures_sort['scale_factor']>1).sum() #20
+small_featuers = (knnfeatures_sort['scale_factor']<1).sum() #29
+#===============================================================================================================================
 # 5. Compare the results of the optimized scaling factors to Feature Importance
 #  from other models
 # multiple linear regression, tree regression, NN, PCR 
-# 
+
+#top 5 features
+#   1stFlrSF	2.986127
+#5	YearRemodAdd	2.537609
+#35	GarageArea	2.133597
+#31	FireplaceQu	2.070233
+#28	TotRmsAbvGrd	2.066917
+
+#bottom 5 features 
+#42	3SsnPorch	0.559233
+#15	HeatingQC	0.548982
+#40	OpenPorchSF	0.526540
+#32	GarageYrBlt	0.438972
+#18	2ndFlrSF	0.325996
+#%%
+#multiple linear regression 
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+import statsmodels.api as sm
+linear_reg = LinearRegression()
+X_train, X_test, y_train, y_test = train_test_split(data_x, data_y, test_size=0.6, random_state=42)
+linear_reg.fit(X_train, y_train)
+lr_feature_importance = pd.DataFrame({'feature': data_x.columns, 'importance': linear_reg.coef_})
+
+feature_importance_sorted = lr_feature_importance.sort_values(by='importance', ascending=False)
+print(feature_importance_sorted)
+
+#top 5 
+#7       ExterQual  12112.508622
+#2     OverallQual  10568.565230
+#27    KitchenQual   9677.676023
+#9        BsmtQual   8252.762558
+#36     GarageQual   6771.077933
+
+#bottom 5
+#10       BsmtCond  -8350.899535
+#37     GarageCond -10072.303507
+#25   BedroomAbvGr -11971.872724
+#26   KitchenAbvGr -19806.626994
+#45         PoolQC -24484.177724
+
+#%%
+#look at summary statistics
+
+X_train_const = sm.add_constant(X_train)
+X_test_const = sm.add_constant(X_test)
+lr_model = sm.OLS(y_train, X_train_const).fit()
+
+
+model_summary = lr_model.summary()
+print(model_summary)
+y_pred = lr_model.predict(X_test_const)
+test_score = lr_model.rsquared
+print(f"Test R-squared: {test_score}")
+feature_stats = pd.DataFrame({
+    'feature': X_train.columns,
+    'coefficient': lr_model.params[1:],  
+    'p-value': lr_model.pvalues[1:],     
+    't-value': lr_model.tvalues[1:],     
+    'std_err': lr_model.bse[1:]          
+})
+
+# Sort by p-value
+feature_stats_sorted = feature_stats.sort_values(by='p-value', ascending = True)
+print(feature_stats_sorted)
+
+#adjusted r squared is 0.896 higher than knn model 
+# the linear regression placed all the quality and condition features as top features with high coefficient, meaning that if quality and condition of certain house areas increase the sale price would increase
+# the ones with negative coefficients are miscellaneous features like pool quality, kitchen above ground and bedroom above ground, year sold
+# in terms of significance, miscellaneous features like garagecars, HeatingQC, CentralAir are also not significant 
+# comparing to the KNN model, there is a lot of overlap between features that are not statistically significant and features reduced by 
+# knn model, including centralAir, HeatingQC, OpenPorchSF, GarageYrBlt	
+# however, two of the top features that knn amplified is not significant in linear regression,  YearRemodAdd, FireplaceQu
+# other features amplified by knn model corresponds with linear regression, including MSSubClass, OverallQual, KitchenQual, GarageArea, GrLivArea
+
+
+#%%
+#Tree regression 
+from sklearn.tree import DecisionTreeRegressor
+tree_reg = DecisionTreeRegressor(random_state=2)
+tree_reg.fit(X_train, y_train)
+tree_feature_importance = pd.DataFrame({
+    'feature': X_train.columns,
+    'importance': tree_reg.feature_importances_
+})
+tree_feature_importance_sorted = tree_feature_importance.copy().sort_values(by='importance', ascending=False)
+print(tree_feature_importance_sorted)
+tree_reg.score(X_train, y_train) #0.9999897481550298
+tree_reg.score(X_test, y_test) #0.6836137828160598
+comparison2 = pd.DataFrame({
+    'knn_feature': knnfeatures_sort.copy()['feature'],
+    'knn_importance': knnfeatures_sort['scale_factor'],
+    'lr_feature': feature_importance_sorted['feature'],
+    'lr_importance': feature_importance_sorted['importance'],
+    'tree_feature': tree_feature_importance_sorted['feature'],
+    'tree_importance': tree_feature_importance_sorted['importance']
+})
+#%%
+print(comparison2)
+
+#the tree feature importance is similar to other two model as overallQual, GrLivArea and 1stFlrSF are all present in top 5
+#the bottom 5 include PoolArea, MiscVal, centralAir 
+# garageyrBlt which was very low in knn turned out to be 12th in tree model, and mscVal which is very low in tree importance is 12th in knn
+# GarageQual, 3SsnPorch are both unimportant features in tree and knn. 
+
+
+# Neural network 
+#%%
+from sklearn.neural_network import MLPRegressor
+from sklearn.inspection import permutation_importance
+nn_reg = MLPRegressor(hidden_layer_sizes=(100, 25, 25), random_state=2, max_iter=1000)
+nn_reg.fit(X_train, y_train)
+perm_importance = permutation_importance(nn_reg, X_test, y_test, n_repeats=10)
+nn_feature_importance = pd.DataFrame({
+    'feature': X_train.columns,
+    'importance_nn': perm_importance.importances_mean
+})
+nn_feature_importance_sorted = nn_feature_importance.sort_values(by='importance_nn', ascending=False)
+
+train_score_nn = nn_reg.score(X_train, y_train) #0.8512941361759958
+test_score_nn = nn_reg.score(X_test, y_test) #0.629423476356608
+
+
+# neural network top features are garageArea, 2ndFlrSF, GrLivArea, BsmtFinSF1, BsmtUnfSF
+# the least important features are lotArea, 1stFlrSF, YearRemodAdd, GarageYrBlt, MoSold
+# the feature importance is quite different than all the other models, likely because it's more complex given 
+# the number of nodes I have chosen  
+
+
+#-------------------------------------------------------------------------------------------------------------------------------------------------
+#save all to csv 
+#%%
+comparison = pd.concat([knnfeatures_sort.reset_index(drop=True), 
+           feature_stats_sorted.reset_index(drop=True),
+           tree_feature_importance_sorted.reset_index(drop=True),
+           nn_feature_importance_sorted.reset_index(drop=True)], axis=1)
+comparison.columns = ['knn_feature', 'knn_importance', 'lr_feature', 'lr_coefficient', 'lr_p_value', 'lr_t_value', 'lr_std_err', 'tree_feature', 'tree_importance', 'nn_feature', 'nn_importance']
+comparison.to_csv('feature_importance_comparison.csv', index=False)
 # %%
 # Conclusion 
 # If I want to maximize the score, I will keep many of the nominal variables that I deleted, especially "Neighborhood", as house prices are usually 
 # highly dependent on location.
+# performance wise, tree regression did not have good test performance and so did NN. However, i did not properly tune the models. 
+# Knn regession seems to be slightly worse than linear regression although both test scores quite high.
+# linear regression had the best interpretability for features due to significance testing.
+# Overall, the housing price is more dependent on condition and quality of large, important areas of the house such as overall scores, garage, living areas, kitchen, 
+# it is less dependent on smaller amenities like heating, central air, front porch, fire palces. However, since test score is optimized in all of the models, the models treated different variables 
+# differently. If the variables are correlated, their importance could be widely different in each models, which reduces interpretability. 
+# surprisingly year sold has not come up as an important features across models, but likely a different encoding is needed for that variable. 
